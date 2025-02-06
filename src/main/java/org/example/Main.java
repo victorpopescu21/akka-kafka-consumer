@@ -1,37 +1,44 @@
 package org.example;
 
+import akka.NotUsed;
 import akka.actor.ActorSystem;
 import akka.kafka.ConsumerSettings;
 import akka.kafka.Subscriptions;
 import akka.kafka.javadsl.Consumer;
 import akka.stream.Materializer;
+import akka.stream.javadsl.Flow;
 import akka.stream.javadsl.Sink;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.apache.kafka.common.serialization.StringDeserializer;
+
 import org.example.entity.ConsumerEntity;
+
+import java.util.logging.Logger;
+
 
 public class Main {
 
 
-
     public static void main(String[] args) {
         ObjectMapper mapper = new ObjectMapper();
+
+        Logger logger = Logger.getLogger(Main.class.getName());
         /*
-        * ActorSystem - creates Akka Actor System named KafkaConsumerSystem, which is required for Akka Streams
-        * Materializer - Converts Akka Streams blueprint into a running stream
-        * */
+         * ActorSystem - creates Akka Actor System named KafkaConsumerSystem, which is required for Akka Streams
+         * Materializer - Converts Akka Streams blueprint into a running stream
+         * */
         ActorSystem system = ActorSystem.create("KafkaConsumerSystem");
         Materializer materializer = Materializer.createMaterializer(system);
 
         /*
-        * Creating Kafka consumer settings using Akka's ConsumerSettings class
-        * new StringDeserializer() - Deserializes the key and value of the Kafka message as a string
-        * withBootstrapServers("localhost:9092") - Specifies the Kafka broker to connect to
-        * withGroupId("akka-consumer-group") - Specifies the consumer group ID
-        * withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest") - Specifies the offset to start consuming from - earliest means from the beginning of the topic
-        * */
+         * Creating Kafka consumer settings using Akka's ConsumerSettings class
+         * new StringDeserializer() - Deserializes the key and value of the Kafka message as a string
+         * withBootstrapServers("localhost:9092") - Specifies the Kafka broker to connect to
+         * withGroupId("akka-consumer-group") - Specifies the consumer group ID
+         * withProperty(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest") - Specifies the offset to start consuming from - earliest means from the beginning of the topic
+         * */
         ConsumerSettings<String, String> consumerSettings =
                 ConsumerSettings.create(system, new StringDeserializer(), new StringDeserializer())
                         .withBootstrapServers("localhost:9092")
@@ -40,22 +47,35 @@ public class Main {
 
 
         /*
-        * Consumer.plainSource - Creates a source that consumes messages from the Kafka topic "victor-topic"
-        * */
+         * Using multiple flows using .via()
+         * */
+
+        Flow<ConsumerRecord<String, String>, String, NotUsed> valueExtract = Flow.fromFunction(ConsumerRecord::value);
+
+        Flow<String, ConsumerEntity, NotUsed> deserialize = Flow.fromFunction(value ->
+        {
+            logger.info("Deserializing: " + value);
+            try {
+                return mapper.readValue(value, ConsumerEntity.class);
+            } catch (Exception e) {
+                logger.warning("Error deserializing: " + value);
+                return new ConsumerEntity(-1, "error", "error");
+            }
+        });
+
+        Flow<ConsumerEntity, String, NotUsed> extractEmail = Flow.fromFunction(ConsumerEntity::getEmail);
+
+
+        /*
+         * Consumer.plainSource - Creates a source that consumes messages from the Kafka topic "victor-topic"
+         * */
         Consumer
                 .plainSource(consumerSettings, Subscriptions.topics("victor-topic"))
-                .map(ConsumerRecord::value)  // Get the message as a string
-                .map(json -> {
-                    System.out.println("🔍 Deserializing JSON: " + json);
-                    try {
-                        return mapper.readValue(json, ConsumerEntity.class);
-                    } catch (Exception e) {
-                        System.err.println("⚠️ Failed to deserialize JSON: " + json);
-                        return new ConsumerEntity(-1, "N/A", "N/A");
-                    }
-                })
-                .filter(entity -> entity != null) // Filter out failed deserialization attempts
-                .map(ConsumerEntity::getEmail) // Get the email from the entity
-                .runWith(Sink.foreach(System.out::println), materializer);
+                .via(valueExtract)
+                .via(deserialize)
+                .via(extractEmail)
+                .to(Sink.foreach(System.out::println))
+                .run(materializer);
+
     }
 }
