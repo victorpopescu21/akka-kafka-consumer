@@ -68,12 +68,16 @@ public class Main {
 
         /*
          * Consumer.plainSource - Creates a source that consumes messages from the Kafka topic "victor-topic"
+         * .aysnc() - introduces async boundaries between the stages of the stream. This is useful when the stream is doing some blocking operation
+         * Parallelism is not controlled by async boundaries. It only controls the execution context. The stages still run synchronously
+         *
+         * mapAsync - Similar to async, but it also controls the parallelism of the stream. This ensures async processing of the stream
          * */
         Consumer
                 .plainSource(consumerSettings, Subscriptions.topics("victor-topic"))
-                .via(valueExtract)
-                .via(deserialize)
-                .via(extractEmail)
+                .via(valueExtract).async()
+                .via(deserialize).async()
+                .via(extractEmail).async()
                 .to(Sink.foreach(System.out::println))
                 .run(materializer);
 
